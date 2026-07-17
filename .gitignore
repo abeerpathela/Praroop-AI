@@ -1,0 +1,39 @@
+# Data artifacts
+data/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Environment / secrets (do not track)
+.env
+.env.*
+*.env
+.envrc
+.venv/
+venv/
+env/
+ENV/
+.conda/
+conda-env/
+Pipfile.lock
+
+# Model weights
+models/*.pt
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Testing / build
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+*.egg
