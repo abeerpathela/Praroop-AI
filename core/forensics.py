@@ -58,6 +58,7 @@ class ForensicEngine:
         image: ImageInput,
         quality: int | None = None,
         scale: float | None = None,
+        normalize: bool = True,
     ) -> np.ndarray:
         """
         Compute Error Level Analysis (ELA) of an image.
@@ -65,6 +66,9 @@ class ForensicEngine:
         Re-encodes the image as JPEG at a fixed quality, then returns the
         amplified absolute difference between the original and recompressed
         versions. Edited regions typically show higher residual intensity.
+
+        When ``normalize`` is False, residuals are only scaled (not peak-mapped),
+        which is better for comparing average intensity across images.
         """
         quality = self.ela_quality if quality is None else quality
         scale = self.ela_scale if scale is None else scale
@@ -86,20 +90,36 @@ class ForensicEngine:
         diff = cv2.absdiff(original, recompressed_bgr).astype(np.float32)
         amplified = diff * float(scale)
 
-        # Avoid ZeroDivisionError / all-zero collapse when normalizing.
-        peak = float(np.max(amplified))
-        if peak > 0.0:
-            ela = (amplified / peak) * 255.0
+        if normalize:
+            # Avoid ZeroDivisionError / all-zero collapse when normalizing.
+            peak = float(np.max(amplified))
+            if peak > 0.0:
+                ela = (amplified / peak) * 255.0
+            else:
+                ela = amplified
         else:
             ela = amplified
 
         return np.clip(ela, 0, 255).astype(np.uint8)
+
+    def perform_ela(
+        self,
+        image: ImageInput,
+        quality: int | None = None,
+        scale: float | None = None,
+        normalize: bool = True,
+    ) -> np.ndarray:
+        """Alias for :meth:`error_level_analysis`."""
+        return self.error_level_analysis(
+            image, quality=quality, scale=scale, normalize=normalize
+        )
 
     def noise_variance_analysis(
         self,
         image: ImageInput,
         ksize: int = 3,
         window: int = 7,
+        normalize: bool = True,
     ) -> np.ndarray:
         """
         Detect pixel inconsistencies via Laplacian-based local noise variance.
@@ -124,13 +144,16 @@ class ForensicEngine:
         mean_sq = cv2.blur(residual * residual, kernel)
         variance = np.maximum(mean_sq - mean * mean, 0.0)
 
-        peak = float(np.max(variance))
-        if peak > 0.0:
-            noise_map = (variance / peak) * 255.0
-        else:
-            noise_map = variance
+        if normalize:
+            peak = float(np.max(variance))
+            if peak > 0.0:
+                noise_map = (variance / peak) * 255.0
+            else:
+                noise_map = variance
+            return np.clip(noise_map, 0, 255).astype(np.uint8)
 
-        return np.clip(noise_map, 0, 255).astype(np.uint8)
+        # Unnormalized map kept as float32 for statistical comparisons.
+        return variance.astype(np.float32)
 
     def analyze(self, image: ImageInput) -> dict[str, np.ndarray]:
         """Run ELA and noise-variance analysis together."""

@@ -1,6 +1,17 @@
-# Data artifacts
-data/
+# Data artifacts (processed / results stay ignored)
+data/processed/
+data/results/
 data/results/*.jpg
+
+# Track small synthetic test assets under data/raw/
+!data/raw/
+!data/raw/README.md
+!data/raw/*.jpg
+!data/raw/forge_meta.json
+
+# ELA temporary recompress artifacts
+temp_resaved.jpg
+**/temp_resaved.jpg
 
 # Python cache
 __pycache__/
