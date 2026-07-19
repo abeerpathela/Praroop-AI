@@ -1,5 +1,6 @@
 # Data artifacts
 data/
+data/results/*.jpg
 
 # Python cache
 __pycache__/
