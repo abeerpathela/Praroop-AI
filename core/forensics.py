@@ -159,5 +159,5 @@ class ForensicEngine:
         """Run ELA and noise-variance analysis together."""
         return {
             "ela": self.error_level_analysis(image),
-            "noise_variance": self.noise_variance_analysis(image),
+            "noise": self.noise_variance_analysis(image),
         }

@@ -1,0 +1,23 @@
+{
+  "name": "Praroop",
+  "description": "Standard Indian government-style ID layout for template verification.",
+  "canvas": {
+    "width": 1000,
+    "height": 1000
+  },
+  "elements": {
+    "Photo": {
+      "bbox": [650, 100, 900, 400]
+    },
+    "Signature": {
+      "bbox": [80, 720, 380, 880]
+    },
+    "QR Code": {
+      "bbox": [700, 720, 920, 940]
+    }
+  },
+  "thresholds": {
+    "min_iou": 0.45,
+    "max_center_offset": 50.0
+  }
+}

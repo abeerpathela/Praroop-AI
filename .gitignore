@@ -9,6 +9,10 @@ data/results/*.jpg
 !data/raw/*.jpg
 !data/raw/forge_meta.json
 
+# Track Praroop template JSON (not binary weights)
+!data/templates/
+!data/templates/*.json
+
 # ELA temporary recompress artifacts
 temp_resaved.jpg
 **/temp_resaved.jpg
@@ -33,8 +37,13 @@ ENV/
 conda-env/
 Pipfile.lock
 
-# Model weights
+# Model weights (never commit trained / downloaded binaries)
+*.pt
+*.weights
 models/*.pt
+models/*.weights
+models/**/*.pt
+models/**/*.weights
 
 # IDE / OS
 .idea/

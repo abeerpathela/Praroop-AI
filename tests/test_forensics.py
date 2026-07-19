@@ -94,6 +94,6 @@ def test_noise_variance_anomaly_in_forged_region(engine: ForensicEngine) -> None
 
 def test_analyze_returns_both_maps(engine: ForensicEngine) -> None:
     result = engine.analyze(FORGED_PATH)
-    assert set(result) == {"ela", "noise_variance"}
+    assert set(result) == {"ela", "noise"}
     assert result["ela"].ndim in (2, 3)
-    assert result["noise_variance"].ndim == 2
+    assert result["noise"].ndim == 2
