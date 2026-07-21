@@ -37,6 +37,12 @@ ENV/
 conda-env/
 Pipfile.lock
 
+# Streamlit secrets / local config
+.streamlit/secrets.toml
+.streamlit/config.toml
+**/.streamlit/secrets.toml
+**/.streamlit/config.toml
+
 # Model weights (never commit trained / downloaded binaries)
 *.pt
 *.weights

@@ -3,3 +3,5 @@ Pillow
 numpy
 pytest
 ultralytics
+streamlit
+pypdfium2
