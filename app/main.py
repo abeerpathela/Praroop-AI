@@ -16,10 +16,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core import forensics as forensics_module
+from core.aggregator import calculate_trust_score, trust_status
 from core.template_matcher import DEFAULT_WEIGHTS, TemplateMatcher
 
 SUPPORTED_TYPES = ["jpg", "jpeg", "png", "pdf"]
 PAGE_TITLE = "Praroop-AI Document Investigation"
+
+# Match synthetic asset JPEG quality so authentic residuals stay low.
+DEFAULT_ELA_QUALITY = 95
+DEFAULT_ELA_SCALE = 20.0
 
 
 def load_document(file_name: str, file_bytes: bytes) -> Image.Image:
@@ -43,39 +48,35 @@ def load_document(file_name: str, file_bytes: bytes) -> Image.Image:
     return image.convert("RGB")
 
 
+# Backwards-compatible alias used by older tests
 def compute_trust_score(
-    noise_map: np.ndarray,
-    template_report: dict[str, Any] | None,
-) -> tuple[float, dict[str, float]]:
+    noise_map: np.ndarray | None = None,
+    template_report: dict[str, Any] | None = None,
+    forensic_metrics: dict[str, Any] | None = None,
+) -> tuple[float, dict[str, Any]]:
     """
-    Combine noise-variance intensity and template alignment into a 0–100 score.
+    Delegate to :func:`core.aggregator.calculate_trust_score`.
 
-    Higher residual noise and more template issues lower trust.
+    Prefer passing ``forensic_metrics``. If only a noise map is provided
+    (legacy), derive a weak stand-in density from its mean.
     """
-    noise_mean = float(np.mean(noise_map.astype(np.float64)))
-    # Map 0..255 mean residual → 100..0 contribution
-    noise_component = float(np.clip(100.0 - (noise_mean / 255.0) * 100.0, 0.0, 100.0))
-
-    if template_report is None or template_report.get("skipped"):
-        template_component = 50.0
-    elif template_report.get("aligned"):
-        template_component = 100.0
-    else:
-        issues = template_report.get("issues") or []
-        template_component = float(np.clip(100.0 - 30.0 * len(issues), 0.0, 100.0))
-
-    trust = float(np.clip(0.55 * noise_component + 0.45 * template_component, 0.0, 100.0))
-    return trust, {
-        "noise_component": noise_component,
-        "template_component": template_component,
-    }
+    if forensic_metrics is None:
+        if noise_map is None:
+            forensic_metrics = {"tamper_density": 0.0, "mean_brightness": 0.0, "anomaly_score": 0.0}
+        else:
+            mean = float(np.mean(noise_map.astype(np.float64)))
+            forensic_metrics = {
+                "tamper_density": mean / 10.0,
+                "mean_brightness": mean,
+                "anomaly_score": mean / 10.0,
+            }
+    return calculate_trust_score(forensic_metrics, template_report)
 
 
 def run_template_alignment(image: Image.Image) -> dict[str, Any]:
     """Run template matching; soft-skip when YOLO weights are missing."""
     try:
         matcher = TemplateMatcher()
-        # Ultralytics accepts numpy RGB arrays
         arr = np.asarray(image)
         return matcher.verify(arr)
     except FileNotFoundError as exc:
@@ -94,19 +95,25 @@ def run_investigation(
     engine: forensics_module.ForensicEngine | None = None,
 ) -> dict[str, Any]:
     """Execute forensic + template checks and compute the trust score."""
-    engine = engine or forensics_module.ForensicEngine(ela_quality=90, ela_scale=15.0)
+    engine = engine or forensics_module.ForensicEngine(
+        ela_quality=DEFAULT_ELA_QUALITY, ela_scale=DEFAULT_ELA_SCALE
+    )
     forensic = engine.analyze(image)
-    ela = forensic["ela"]
-    noise = forensic["noise"]
     template_report = run_template_alignment(image)
-    trust, components = compute_trust_score(noise, template_report)
+    metrics = {
+        "tamper_density": forensic["tamper_density"],
+        "anomaly_score": forensic["anomaly_score"],
+        "mean_brightness": forensic["mean_brightness"],
+    }
+    trust, components = calculate_trust_score(metrics, template_report)
     return {
         "original": image,
-        "ela": ela,
-        "noise": noise,
+        "ela": forensic["ela"],
+        "noise": forensic["noise"],
         "template": template_report,
         "trust_score": trust,
         "components": components,
+        "forensic_metrics": metrics,
         "engine": engine,
     }
 
@@ -116,26 +123,31 @@ def _ela_preview(ela: np.ndarray) -> Image.Image:
     if ela.ndim == 2:
         rgb = np.stack([ela, ela, ela], axis=-1)
     elif ela.ndim == 3 and ela.shape[2] == 3:
-        # ForensicEngine stores OpenCV BGR — convert for Streamlit
         rgb = ela[:, :, ::-1]
     else:
         rgb = ela
     return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
 
 
-def _trust_label(score: float) -> str:
-    if score >= 75:
-        return "Likely authentic"
-    if score >= 45:
-        return "Needs review"
-    return "High risk of tampering"
-
-
-def render_trust_gauge(score: float) -> None:
-    """Display a simple trust-score gauge using metric + progress."""
+def render_trust_gauge(score: float, yolo_missing: bool = False) -> None:
+    """Display trust score with status band messaging."""
+    message, level = trust_status(score)
     st.subheader("Trust Score")
-    st.metric(label="Overall trust", value=f"{score:.1f} / 100", delta=_trust_label(score))
+    st.metric(label="Overall trust", value=f"{score:.1f} / 100")
     st.progress(min(max(score / 100.0, 0.0), 1.0))
+
+    if level == "success":
+        st.success(message)
+    elif level == "warning":
+        st.warning(message)
+    else:
+        st.error(message)
+
+    if yolo_missing:
+        st.warning(
+            "Template Verification skipped: YOLO weights missing. "
+            "Score based on Forensic signals only."
+        )
 
 
 def main() -> None:
@@ -166,10 +178,12 @@ def main() -> None:
         with st.spinner("Running forensic and template checks..."):
             report = run_investigation(image)
 
+        comps = report["components"]
         st.session_state["last_report"] = {
             "trust_score": report["trust_score"],
-            "components": report["components"],
+            "components": comps,
             "template": report["template"],
+            "forensic_metrics": report["forensic_metrics"],
             "triggered": True,
         }
 
@@ -181,19 +195,22 @@ def main() -> None:
             st.subheader("ELA Heatmap")
             st.image(_ela_preview(report["ela"]), width="stretch")
 
-        render_trust_gauge(report["trust_score"])
-        comps = report["components"]
-        c1, c2 = st.columns(2)
-        c1.metric("Noise integrity", f"{comps['noise_component']:.1f}")
-        c2.metric("Template alignment", f"{comps['template_component']:.1f}")
+        render_trust_gauge(
+            report["trust_score"],
+            yolo_missing=bool(comps.get("yolo_missing")),
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Tamper density", f"{comps['tamper_density']:.2f}")
+        c2.metric("Forensic score", f"{comps['forensic_score']:.1f}")
+        c3.metric(
+            "Template weight",
+            "0% (skipped)" if comps.get("yolo_missing") else f"{100 * comps['template_weight']:.0f}%",
+        )
 
         template = report["template"]
         st.subheader("Template alignment")
         if template.get("skipped"):
-            st.info(
-                "YOLO weights not found — template alignment skipped. "
-                f"Expected: `{DEFAULT_WEIGHTS}`"
-            )
+            st.info(f"Expected YOLO weights at: `{DEFAULT_WEIGHTS}`")
         elif template.get("aligned"):
             st.success("Document layout matches the Praroop template.")
         else:

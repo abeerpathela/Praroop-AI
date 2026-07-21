@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
-from typing import Union
+from typing import Any, Union
 
 import cv2
 import numpy as np
@@ -53,13 +53,58 @@ class ForensicEngine:
 
         raise TypeError(f"Unsupported image type: {type(image)!r}")
 
+    @staticmethod
+    def _ela_gray(ela: np.ndarray) -> np.ndarray:
+        """Collapse an ELA map to a float32 brightness plane."""
+        if ela.ndim == 3:
+            return ela.astype(np.float32).mean(axis=2)
+        return ela.astype(np.float32)
+
+    def compute_ela_anomaly(self, ela: np.ndarray) -> dict[str, float]:
+        """
+        Quantify localized ELA glow.
+
+        ``mean_brightness`` is the global ELA mean. Patches brighter than
+        mean + 3σ define anomalies; ``tamper_density`` is the peak local
+        brightness inside those patches (high-intensity localized glow).
+        """
+        gray = self._ela_gray(ela)
+        mean_brightness = float(np.mean(gray))
+        std = float(np.std(gray))
+        threshold = mean_brightness + 3.0 * std
+
+        hot_mask = gray > threshold
+        local = cv2.blur(gray, (31, 31))
+        if np.any(hot_mask):
+            tamper_density = float(np.max(local[hot_mask]))
+            hotspot_mean = float(np.mean(gray[hot_mask]))
+            hot_fraction = float(np.mean(hot_mask))
+        else:
+            tamper_density = 0.0
+            hotspot_mean = 0.0
+            hot_fraction = 0.0
+
+        # anomaly_score mirrors localized glow strength used by the scorer
+        anomaly_score = tamper_density
+
+        return {
+            "mean_brightness": mean_brightness,
+            "std_brightness": std,
+            "threshold": float(threshold),
+            "hot_fraction": hot_fraction,
+            "hotspot_mean": hotspot_mean,
+            "tamper_density": tamper_density,
+            "anomaly_score": anomaly_score,
+        }
+
     def error_level_analysis(
         self,
         image: ImageInput,
         quality: int | None = None,
         scale: float | None = None,
         normalize: bool = True,
-    ) -> np.ndarray:
+        return_metrics: bool = False,
+    ) -> np.ndarray | tuple[np.ndarray, dict[str, float]]:
         """
         Compute Error Level Analysis (ELA) of an image.
 
@@ -67,8 +112,8 @@ class ForensicEngine:
         amplified absolute difference between the original and recompressed
         versions. Edited regions typically show higher residual intensity.
 
-        When ``normalize`` is False, residuals are only scaled (not peak-mapped),
-        which is better for comparing average intensity across images.
+        When ``return_metrics`` is True, also returns anomaly / tamper metrics
+        derived from the unnormalized residual (better for scoring).
         """
         quality = self.ela_quality if quality is None else quality
         scale = self.ela_scale if scale is None else scale
@@ -90,8 +135,11 @@ class ForensicEngine:
         diff = cv2.absdiff(original, recompressed_bgr).astype(np.float32)
         amplified = diff * float(scale)
 
+        # Metrics always use unnormalized residuals so peak-mapping cannot
+        # hide absolute glow differences between images.
+        metrics = self.compute_ela_anomaly(np.clip(amplified, 0, 255))
+
         if normalize:
-            # Avoid ZeroDivisionError / all-zero collapse when normalizing.
             peak = float(np.max(amplified))
             if peak > 0.0:
                 ela = (amplified / peak) * 255.0
@@ -100,7 +148,10 @@ class ForensicEngine:
         else:
             ela = amplified
 
-        return np.clip(ela, 0, 255).astype(np.uint8)
+        ela_u8 = np.clip(ela, 0, 255).astype(np.uint8)
+        if return_metrics:
+            return ela_u8, metrics
+        return ela_u8
 
     def perform_ela(
         self,
@@ -108,10 +159,15 @@ class ForensicEngine:
         quality: int | None = None,
         scale: float | None = None,
         normalize: bool = True,
-    ) -> np.ndarray:
+        return_metrics: bool = False,
+    ) -> np.ndarray | tuple[np.ndarray, dict[str, float]]:
         """Alias for :meth:`error_level_analysis`."""
         return self.error_level_analysis(
-            image, quality=quality, scale=scale, normalize=normalize
+            image,
+            quality=quality,
+            scale=scale,
+            normalize=normalize,
+            return_metrics=return_metrics,
         )
 
     def noise_variance_analysis(
@@ -152,12 +208,16 @@ class ForensicEngine:
                 noise_map = variance
             return np.clip(noise_map, 0, 255).astype(np.uint8)
 
-        # Unnormalized map kept as float32 for statistical comparisons.
         return variance.astype(np.float32)
 
-    def analyze(self, image: ImageInput) -> dict[str, np.ndarray]:
-        """Run ELA and noise-variance analysis together."""
+    def analyze(self, image: ImageInput) -> dict[str, Any]:
+        """Run ELA and noise-variance analysis together with anomaly metrics."""
+        ela, metrics = self.error_level_analysis(image, return_metrics=True)
         return {
-            "ela": self.error_level_analysis(image),
+            "ela": ela,
             "noise": self.noise_variance_analysis(image),
+            "mean_brightness": metrics["mean_brightness"],
+            "tamper_density": metrics["tamper_density"],
+            "anomaly_score": metrics["anomaly_score"],
+            "ela_metrics": metrics,
         }

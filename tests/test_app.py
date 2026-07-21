@@ -34,7 +34,18 @@ def _mock_engine() -> MagicMock:
     ela[10:30, 10:30] = 200
     noise = np.full((h, w), 40, dtype=np.uint8)
     noise[10:30, 10:30] = 180
-    engine.analyze.return_value = {"ela": ela, "noise": noise}
+    engine.analyze.return_value = {
+        "ela": ela,
+        "noise": noise,
+        "tamper_density": 14.0,
+        "anomaly_score": 14.0,
+        "mean_brightness": 0.17,
+        "ela_metrics": {
+            "tamper_density": 14.0,
+            "anomaly_score": 14.0,
+            "mean_brightness": 0.17,
+        },
+    }
     engine.error_level_analysis.return_value = ela
     engine.noise_variance_analysis.return_value = noise
     return engine
@@ -85,17 +96,20 @@ def test_generate_report_button_triggers_engine() -> None:
         assert "trust_score" in last_report
 
 
-def test_compute_trust_score_penalizes_noise_and_misalignment() -> None:
+def test_compute_trust_score_penalizes_ela_glow() -> None:
     from app.main import compute_trust_score
 
-    clean_noise = np.zeros((32, 32), dtype=np.uint8)
-    hot_noise = np.full((32, 32), 200, dtype=np.uint8)
-
-    high, _ = compute_trust_score(clean_noise, {"aligned": True, "issues": []})
+    high, _ = compute_trust_score(
+        forensic_metrics={"tamper_density": 3.0, "anomaly_score": 3.0, "mean_brightness": 0.09},
+        template_report={"skipped": True},
+    )
     low, _ = compute_trust_score(
-        hot_noise, {"aligned": False, "issues": ["Misaligned Photo", "Missing QR Code"]}
+        forensic_metrics={"tamper_density": 14.0, "anomaly_score": 14.0, "mean_brightness": 0.17},
+        template_report={"skipped": True},
     )
     assert high > low
+    assert high > 85
+    assert low < 50
     assert 0.0 <= low <= 100.0
     assert 0.0 <= high <= 100.0
 
