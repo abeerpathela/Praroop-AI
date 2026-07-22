@@ -10,6 +10,8 @@ from typing import Optional
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 
+from core.ocr_checker import embed_file_metadata
+
 # Canvas and layout (1000x1000 sample ID card)
 WIDTH, HEIGHT = 1000, 1000
 JPEG_QUALITY = 95
@@ -20,6 +22,10 @@ PHOTO_BOX = (650, 100, 900, 400)  # left, top, right, bottom
 DOB_LABEL = "DOB: 01-01-"
 DOB_YEAR = "1990"
 FORGED_YEAR = "1985"
+
+# Canonical identity fields (also embedded in JPEG EXIF metadata)
+DOCUMENT_NAME = "Rahul Kumar"
+DOCUMENT_ID = "IND-77821"
 
 RAW_DIR = Path(__file__).resolve().parents[1] / "data" / "raw"
 SAMPLE_PATH = RAW_DIR / "sample.jpg"
@@ -152,7 +158,8 @@ def create_authentic_image(path: Path = SAMPLE_PATH) -> Path:
 
     # Double round-trip at the same quality stabilizes authentic residuals.
     stable = _jpeg_bytes(_jpeg_bytes(img, JPEG_QUALITY), JPEG_QUALITY)
-    stable.save(path, format="JPEG", quality=JPEG_QUALITY)
+    exif = embed_file_metadata(stable, DOCUMENT_NAME, DOCUMENT_ID)
+    stable.save(path, format="JPEG", quality=JPEG_QUALITY, exif=exif)
 
     META_PATH.write_text(
         json.dumps(
@@ -160,6 +167,8 @@ def create_authentic_image(path: Path = SAMPLE_PATH) -> Path:
                 "year_box": list(year_box),
                 "forged_year_pos": list(forged_pos),
                 "font_mode": font_mode,
+                "name": DOCUMENT_NAME,
+                "id_number": DOCUMENT_ID,
             },
             indent=2,
         ),
@@ -204,6 +213,8 @@ def create_forged_image(
     else:
         meta = {"font_mode": font_mode, "forged_year_pos": list(FORGED_YEAR_POS)}
     meta["year_box"] = list(YEAR_BOX)
+    meta["name"] = DOCUMENT_NAME
+    meta["id_number"] = DOCUMENT_ID
     META_PATH.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     # White-out original year area, then paste foreign-history patch
@@ -218,7 +229,9 @@ def create_forged_image(
         if alt is not None:
             draw.text((left + 8, top + 8), FORGED_YEAR, fill=(10, 10, 30), font=alt)
 
-    img.save(forged_path, format="JPEG", quality=JPEG_QUALITY)
+    # Preserve identity metadata so OCR can cross-check Name / ID
+    exif = embed_file_metadata(img, DOCUMENT_NAME, DOCUMENT_ID)
+    img.save(forged_path, format="JPEG", quality=JPEG_QUALITY, exif=exif)
     return forged_path
 
 

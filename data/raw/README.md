@@ -12,6 +12,7 @@
 #
 # Companion file:
 # - `forge_meta.json` — pixel box of the forged year region for tests
+# - JPEG EXIF ImageDescription embeds `{"name", "id_number"}` for OCR cross-check
 #
 # Regenerate with:
 #   py -m utils.generate_test_assets

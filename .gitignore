@@ -13,9 +13,15 @@ data/results/*.jpg
 !data/templates/
 !data/templates/*.json
 
-# ELA temporary recompress artifacts
+# ELA temporary recompress artifacts / scratch images
 temp_resaved.jpg
 **/temp_resaved.jpg
+*_tmp.jpg
+*_tmp.png
+temp_*.jpg
+temp_*.png
+data/raw/*_temp.*
+data/raw/tmp_*
 
 # Python cache
 __pycache__/
@@ -50,6 +56,10 @@ models/*.pt
 models/*.weights
 models/**/*.pt
 models/**/*.weights
+
+# EasyOCR / torch download caches (local only)
+.EasyOCR/
+**/~/.EasyOCR/
 
 # IDE / OS
 .idea/

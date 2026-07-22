@@ -72,6 +72,18 @@ def test_generate_report_button_triggers_engine() -> None:
                 "skipped": False,
             },
         ),
+        patch(
+            "app.main.run_ocr_check",
+            return_value={
+                "ocr_score": 100.0,
+                "matched": {"name": True, "id_number": True},
+                "fields": {},
+                "all_match": True,
+                "text_fields": {"name": "Rahul Kumar", "id_number": "IND-77821"},
+                "metadata": {"name": "Rahul Kumar", "id_number": "IND-77821"},
+                "skipped": False,
+            },
+        ),
     ):
         # Also patch the name bound inside the Streamlit script module after load.
         at = AppTest.from_file(str(APP_PATH), default_timeout=30)

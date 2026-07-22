@@ -5,3 +5,4 @@ pytest
 ultralytics
 streamlit
 pypdfium2
+easyocr

@@ -16,7 +16,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core import forensics as forensics_module
-from core.aggregator import calculate_trust_score, trust_status
+from core.aggregator import calculate_trust_score, evaluate_document, trust_status
+from core.ocr_checker import OCRChecker
 from core.template_matcher import DEFAULT_WEIGHTS, TemplateMatcher
 
 SUPPORTED_TYPES = ["jpg", "jpeg", "png", "pdf"]
@@ -90,30 +91,70 @@ def run_template_alignment(image: Image.Image) -> dict[str, Any]:
         }
 
 
+def run_ocr_check(
+    image: Image.Image,
+    metadata_source: str | Path | bytes | dict | None = None,
+    ocr_checker: OCRChecker | None = None,
+) -> dict[str, Any]:
+    """Run OCR↔metadata cross-check; soft-skip on OCR init/runtime failure."""
+    try:
+        checker = ocr_checker or OCRChecker(gpu=True)
+        return checker.cross_check(image, metadata_source=metadata_source)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ocr_score": 0.0,
+            "matched": {},
+            "fields": {},
+            "all_match": False,
+            "text_fields": {},
+            "metadata": {},
+            "skipped": True,
+            "error": str(exc),
+        }
+
+
 def run_investigation(
     image: Image.Image,
     engine: forensics_module.ForensicEngine | None = None,
+    ocr_checker: OCRChecker | None = None,
+    metadata_source: str | Path | bytes | dict | None = None,
+    source_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Execute forensic + template checks and compute the trust score."""
+    """Execute forensic + template + OCR checks and compute the trust score."""
+    if source_path is not None:
+        # Prefer the full evaluate_document path when a filesystem path is known
+        return evaluate_document(
+            source_path,
+            engine=engine,
+            ocr_checker=ocr_checker,
+            ela_quality=DEFAULT_ELA_QUALITY,
+            ela_scale=DEFAULT_ELA_SCALE,
+        )
+
     engine = engine or forensics_module.ForensicEngine(
         ela_quality=DEFAULT_ELA_QUALITY, ela_scale=DEFAULT_ELA_SCALE
     )
     forensic = engine.analyze(image)
     template_report = run_template_alignment(image)
+    ocr_report = run_ocr_check(image, metadata_source=metadata_source or image, ocr_checker=ocr_checker)
     metrics = {
         "tamper_density": forensic["tamper_density"],
         "anomaly_score": forensic["anomaly_score"],
         "mean_brightness": forensic["mean_brightness"],
     }
-    trust, components = calculate_trust_score(metrics, template_report)
+    trust, components = calculate_trust_score(metrics, template_report, ocr_report)
+    status_message, status_level = trust_status(trust)
     return {
         "original": image,
         "ela": forensic["ela"],
         "noise": forensic["noise"],
         "template": template_report,
+        "ocr": ocr_report,
         "trust_score": trust,
         "components": components,
         "forensic_metrics": metrics,
+        "status_message": status_message,
+        "status_level": status_level,
         "engine": engine,
     }
 
@@ -129,7 +170,11 @@ def _ela_preview(ela: np.ndarray) -> Image.Image:
     return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
 
 
-def render_trust_gauge(score: float, yolo_missing: bool = False) -> None:
+def render_trust_gauge(
+    score: float,
+    yolo_missing: bool = False,
+    ocr_skipped: bool = False,
+) -> None:
     """Display trust score with status band messaging."""
     message, level = trust_status(score)
     st.subheader("Trust Score")
@@ -147,13 +192,20 @@ def render_trust_gauge(score: float, yolo_missing: bool = False) -> None:
         st.warning(
             "Template Verification skipped: YOLO weights missing. "
             "Score based on Forensic signals only."
+            if ocr_skipped
+            else "Template Verification skipped: YOLO weights missing. "
+            "Score based on Forensic + OCR signals."
         )
+    if ocr_skipped:
+        st.warning("OCR cross-check skipped. Score excludes OCR match component.")
 
 
 def main() -> None:
     st.set_page_config(page_title=PAGE_TITLE, layout="wide")
     st.title("Praroop-AI")
-    st.caption("Document forgery investigation — ELA, noise analysis, and template alignment.")
+    st.caption(
+        "Document forgery investigation — ELA, template alignment, and OCR metadata cross-check."
+    )
 
     uploaded = st.file_uploader(
         "Upload a document (JPG, PNG, or PDF)",
@@ -170,19 +222,21 @@ def main() -> None:
             return
 
         try:
-            image = load_document(uploaded.name, uploaded.getvalue())
+            file_bytes = uploaded.getvalue()
+            image = load_document(uploaded.name, file_bytes)
         except Exception as exc:  # noqa: BLE001 — surface upload/decode errors in UI
             st.error(f"Could not read document: {exc}")
             return
 
-        with st.spinner("Running forensic and template checks..."):
-            report = run_investigation(image)
+        with st.spinner("Running forensic, template, and OCR checks..."):
+            report = run_investigation(image, metadata_source=file_bytes)
 
         comps = report["components"]
         st.session_state["last_report"] = {
             "trust_score": report["trust_score"],
             "components": comps,
             "template": report["template"],
+            "ocr": report.get("ocr"),
             "forensic_metrics": report["forensic_metrics"],
             "triggered": True,
         }
@@ -198,14 +252,13 @@ def main() -> None:
         render_trust_gauge(
             report["trust_score"],
             yolo_missing=bool(comps.get("yolo_missing")),
+            ocr_skipped=bool(comps.get("ocr_skipped")),
         )
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Tamper density", f"{comps['tamper_density']:.2f}")
-        c2.metric("Forensic score", f"{comps['forensic_score']:.1f}")
-        c3.metric(
-            "Template weight",
-            "0% (skipped)" if comps.get("yolo_missing") else f"{100 * comps['template_weight']:.0f}%",
-        )
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("ELA score", f"{comps.get('ela_score', comps['forensic_score']):.1f}")
+        c2.metric("Template score", f"{comps.get('template_score', 0):.1f}")
+        c3.metric("OCR match", f"{comps.get('ocr_score', 0):.1f}")
+        c4.metric("Tamper density", f"{comps['tamper_density']:.2f}")
 
         template = report["template"]
         st.subheader("Template alignment")
@@ -216,6 +269,19 @@ def main() -> None:
         else:
             issues = template.get("issues") or []
             st.warning("Layout issues detected: " + ", ".join(issues) if issues else "Misaligned")
+
+        ocr = report.get("ocr") or {}
+        st.subheader("OCR ↔ Metadata")
+        if ocr.get("skipped"):
+            st.info(f"OCR unavailable: {ocr.get('error', 'unknown error')}")
+        else:
+            matched = ocr.get("matched") or {}
+            st.write(
+                f"Name match: {'✅' if matched.get('name') else '❌'} · "
+                f"ID match: {'✅' if matched.get('id_number') else '❌'}"
+            )
+            fields = ocr.get("fields") or {}
+            st.json(fields)
 
 
 if __name__ == "__main__":

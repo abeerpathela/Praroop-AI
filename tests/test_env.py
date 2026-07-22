@@ -10,6 +10,7 @@ REQUIRED_MODULES = [
     ("numpy", "numpy"),
     ("pytest", "pytest"),
     ("ultralytics", "ultralytics"),
+    ("easyocr", "easyocr"),
 ]
 
 
